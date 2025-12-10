@@ -156,7 +156,24 @@ st.markdown("""
         color: var(--text-dark);
     }
     
-    header, footer, [data-testid="stToolbar"] {visibility: hidden;}
+    #header, footer, [data-testid="stToolbar"] {visibility: hidden;}
+    /* 隐藏顶部装饰条和汉堡菜单等，但保留左上角的展开箭头 */
+    header[data-testid="stHeader"] {
+        background: transparent;
+    }
+    /* 隐藏右上角的 Deploy/Setting 按钮 */
+    [data-testid="stToolbar"] {
+        visibility: hidden;
+    }
+    /* 隐藏页脚 */
+    footer {
+        visibility: hidden;
+    }
+    /* 关键：确保侧边栏的控制按钮可见 (如果被意外隐藏) */
+    section[data-testid="stSidebar"] > div {
+        padding-top: 2rem; /* 避免内容被按钮遮挡 */
+    }
+
 
     /* 卡片通用样式 */
     .li-card {
@@ -275,7 +292,7 @@ if api_key:
 def get_gemini_response(prompt, system_instruction):
     if not api_key:
         return "⚠️ API Key Missing."
-    model = genai.GenerativeModel(model_name='gemini-2.5-pro', system_instruction=system_instruction)
+    model = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=system_instruction)
     try:
         response = model.generate_content(prompt)
         return response.text
