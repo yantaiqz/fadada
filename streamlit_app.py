@@ -109,7 +109,8 @@ TRANSLATIONS = {
         "sec_lawyers": "推荐律师",
         "sec_firms": "知名律所",
         "sec_courts": "司法/仲裁机构",
-        "sec_agencies": "合规/财税/注册机构"
+        "sec_agencies": "合规/财税/注册机构",
+        "toggle_sidebar": "展开/收起侧边栏"  # 新增翻译
     },
     "en": {
         "tab_templates": "Legal Documents",
@@ -128,12 +129,13 @@ TRANSLATIONS = {
         "sec_lawyers": "Recommended Lawyers",
         "sec_firms": "Top Law Firms",
         "sec_courts": "Judicial & Arbitration",
-        "sec_agencies": "Compliance & Agencies"
+        "sec_agencies": "Compliance & Agencies",
+        "toggle_sidebar": "Toggle Sidebar"  # 新增翻译
     }
 }
 
 # -------------------------------------------------------------
-# --- 2. CSS 样式 (保持 LinkedIn 风格) ---
+# --- 2. CSS 样式 (修复侧边栏控制按钮) ---
 # -------------------------------------------------------------
 st.markdown("""
 <style>
@@ -156,24 +158,29 @@ st.markdown("""
         color: var(--text-dark);
     }
     
-    #header, footer, [data-testid="stToolbar"] {visibility: hidden;}
-    /* 隐藏顶部装饰条和汉堡菜单等，但保留左上角的展开箭头 */
+    /* 修复：仅隐藏不必要的头部元素，保留侧边栏控制按钮 */
+    #header, footer {visibility: hidden;}
     header[data-testid="stHeader"] {
         background: transparent;
+        /* 保留头部高度，避免控制按钮被遮挡 */
+        height: 4rem !important;
     }
-    /* 隐藏右上角的 Deploy/Setting 按钮 */
-    [data-testid="stToolbar"] {
+    /* 仅隐藏工具栏的Deploy/Setting，保留侧边栏控制 */
+    [data-testid="stToolbar"] > div:not([data-testid="stSidebarNav"]) {
         visibility: hidden;
     }
-    /* 隐藏页脚 */
-    footer {
-        visibility: hidden;
+    /* 确保侧边栏控制按钮可见且可点击 */
+    [data-testid="stSidebarNav"] {
+        visibility: visible !important;
+        z-index: 9999 !important;
     }
-    /* 关键：确保侧边栏的控制按钮可见 (如果被意外隐藏) */
-    section[data-testid="stSidebar"] > div {
-        padding-top: 2rem; /* 避免内容被按钮遮挡 */
+    /* 侧边栏样式修复 */
+    [data-testid="stSidebar"] {
+        background-color: var(--bg-color) !important;
+        border-right: none;
+        /* 移除过度的padding，避免内容遮挡 */
+        padding-top: 1rem !important;
     }
-
 
     /* 卡片通用样式 */
     .li-card {
@@ -185,12 +192,6 @@ st.markdown("""
         box-shadow: 0 0 0 1px rgba(0,0,0,0.04);
     }
 
-    /* 侧边栏 */
-    [data-testid="stSidebar"] {
-        background-color: var(--bg-color) !important;
-        border-right: none;
-    }
-    
     .profile-bg {
         background: #a0b4b7;
         height: 60px;
@@ -280,11 +281,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# -------------------------------------------------------------
+# --- 3. 侧边栏状态管理 (新增核心逻辑) ---
+# -------------------------------------------------------------
+# 初始化侧边栏状态
+if "sidebar_state" not in st.session_state:
+    st.session_state.sidebar_state = "expanded"
+
+# 定义切换侧边栏的函数
+def toggle_sidebar():
+    st.session_state.sidebar_state = "collapsed" if st.session_state.sidebar_state == "expanded" else "expanded"
+    # 强制刷新页面以应用状态
+    st.rerun()
 
 # -------------------------------------------------------------
-# --- 3. API 与 逻辑 ---
+# --- 4. API 与 逻辑 ---
 # -------------------------------------------------------------
-
 api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
@@ -301,8 +313,7 @@ def get_gemini_response(prompt, system_instruction):
 
 # 模拟专家数据生成函数
 def get_mock_experts(country):
-    # 根据国家简单调整前缀，实际应从数据库获取
-    loc = country.split(" ")[0] # 获取Emoji或国家名
+    loc = country.split(" ")[0]
     return {
         "lawyers": [
             {"name": f"Alice Wang ({loc})", "title": "Corporate Partner", "firm": "Global Law LLP"},
@@ -331,11 +342,22 @@ def get_mock_experts(country):
     }
 
 # -------------------------------------------------------------
-# --- 4. 侧边栏 ---
+# --- 5. 主界面顶部添加手动切换按钮 (兜底方案) ---
 # -------------------------------------------------------------
+# 先获取语言配置
+lang_choice = st.session_state.get("lang_choice", "🇨🇳 中文")
+lang_code = LANG_OPTIONS[lang_choice]
+T = TRANSLATIONS[lang_code]
 
+# 在主界面顶部添加切换按钮（备用控制方式）
+st.button(T["toggle_sidebar"], on_click=toggle_sidebar, key="toggle_btn", use_container_width=False)
+
+# -------------------------------------------------------------
+# --- 6. 侧边栏 ---
+# -------------------------------------------------------------
 with st.sidebar:
-    lang_choice = st.selectbox("Language / 语言", list(LANG_OPTIONS.keys()))
+    # 保存语言选择到session_state
+    lang_choice = st.selectbox("Language / 语言", list(LANG_OPTIONS.keys()), key="lang_choice")
     lang_code = LANG_OPTIONS[lang_choice]
     T = TRANSLATIONS[lang_code]
     
@@ -361,9 +383,8 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# --- 5. 主界面 Workspace ---
+# --- 7. 主界面 Workspace ---
 # -------------------------------------------------------------
-
 if "messages" not in st.session_state or st.session_state.get("current_persona") != current_persona_name:
     st.session_state.messages = []
     st.session_state.current_persona = current_persona_name
@@ -381,7 +402,7 @@ tab_templates, tab_consult, tab_lawyers, tab_review = st.tabs([
     f"🛡️ {T['tab_review']}"
 ])
 
-# --- Tab 1: 法律文书库 (Expanded) ---
+# --- Tab 1: 法律文书库 ---
 with tab_templates:
     st.markdown(f"### {T['tab_templates']}")
     rec_list = RECOMMENDED_TEMPLATES.get(selected_persona_key, [])
@@ -411,10 +432,8 @@ with tab_templates:
                 if st.button(T['generate_btn'], key=f"tpl_{idx}", use_container_width=True):
                     st.success(f"Drafting {template_name}...")
 
-
-# --- Tab 2: 咨询顾问 (Country Selector) ---
+# --- Tab 2: 咨询顾问 ---
 with tab_consult:
-    # 顶部状态栏
     st.markdown(f"""
     <div class="li-card" style="display:flex; align-items:center;">
         <div style="width:40px; height:40px; border-radius:50%; background:#eee; margin-right:15px; display:flex; align-items:center; justify-content:center;">👨‍💼</div>
@@ -424,10 +443,8 @@ with tab_consult:
     </div>
     """, unsafe_allow_html=True)
 
-    # 1. 增加国家选择下拉框
     selected_country = st.selectbox(T["target_region_label"], COUNTRY_LIST, index=0)
     
-    # 历史消息
     for msg in st.session_state.messages:
         avatar = "🤖" if msg["role"] == "assistant" else "👨‍💼"
         bg_color = "#f3f6f8" if msg["role"] == "assistant" else "#ffffff"
@@ -443,7 +460,6 @@ with tab_consult:
         </div>
         """, unsafe_allow_html=True)
 
-    # 输入框
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_input("", placeholder=T["chat_placeholder"], label_visibility="collapsed")
         col_actions = st.columns([6, 1])
@@ -458,8 +474,7 @@ with tab_consult:
             st.session_state.messages.append({"role": "assistant", "content": ai_reply})
         st.rerun()
 
-
-# --- Tab 3: 寻找专家 (Expanded Categories) ---
+# --- Tab 3: 寻找专家 ---
 with tab_lawyers:
     st.markdown(f"""
     <div class="li-card">
@@ -468,16 +483,11 @@ with tab_lawyers:
     </div>
     """, unsafe_allow_html=True)
 
-    # 1. 增加国家选择
     expert_country = st.selectbox(f"{T['target_region_label']} (Experts)", COUNTRY_LIST, index=0, key="expert_country")
-    
-    # 获取模拟数据
     mock_data = get_mock_experts(expert_country)
     
-    # 定义渲染辅助函数
     def render_expert_section(title, items, icon, is_square=False):
         st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
-        # 使用 2x2 Grid
         cols = st.columns(2)
         for i, item in enumerate(items):
             with cols[i % 2]:
@@ -498,12 +508,10 @@ with tab_lawyers:
                 </div>
                 """, unsafe_allow_html=True)
 
-    # 2. 渲染四大板块
-    render_expert_section(T['sec_lawyers'], mock_data['lawyers'], "⚖️") # 律师
-    render_expert_section(T['sec_firms'], mock_data['firms'], "🏢", is_square=True) # 律所
-    render_expert_section(T['sec_courts'], mock_data['institutions'], "🏛️", is_square=True) # 司法
-    render_expert_section(T['sec_agencies'], mock_data['agencies'], "💼", is_square=True) # 机构
-
+    render_expert_section(T['sec_lawyers'], mock_data['lawyers'], "⚖️")
+    render_expert_section(T['sec_firms'], mock_data['firms'], "🏢", is_square=True)
+    render_expert_section(T['sec_courts'], mock_data['institutions'], "🏛️", is_square=True)
+    render_expert_section(T['sec_agencies'], mock_data['agencies'], "💼", is_square=True)
 
 # --- Tab 4: 文书审查 ---
 with tab_review:
