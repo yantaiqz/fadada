@@ -5,8 +5,12 @@ import json
 # -------------------------------------------------------------
 # --- 1. 配置与基础数据定义 ---
 # -------------------------------------------------------------
-
-st.set_page_config(page_title="iTerms | Legal Workspace", page_icon="⚖️", layout="wide")
+st.set_page_config(
+    page_title="iTerms | Legal Workspace", 
+    page_icon="⚖️", 
+    layout="wide",
+    initial_sidebar_state="expanded" 
+)
 
 # 语言选项
 LANG_OPTIONS = {
@@ -271,7 +275,7 @@ if api_key:
 def get_gemini_response(prompt, system_instruction):
     if not api_key:
         return "⚠️ API Key Missing."
-    model = genai.GenerativeModel(model_name='gemini-2.0-flash', system_instruction=system_instruction)
+    model = genai.GenerativeModel(model_name='gemini-2.5-pro', system_instruction=system_instruction)
     try:
         response = model.generate_content(prompt)
         return response.text
