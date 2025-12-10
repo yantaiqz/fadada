@@ -1,484 +1,574 @@
 import streamlit as st
-import time
-import random
+import google.generativeai as genai
+import io
+import json
+import docx
 
-# -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & STATE MANAGEMENT
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="LexiFlow - Global Legal AI",
-    page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# -------------------------------------------------------------
+# --- 1. 配置与多语言/画像定义 ---
+# -------------------------------------------------------------
 
-# Initialize Session State
-if 'language' not in st.session_state:
-    st.session_state.language = '中文'
-if 'generated_card' not in st.session_state:
-    st.session_state.generated_card = None
+st.set_page_config(page_title="iTerms | Legal Network", page_icon="⚖️", layout="wide")
 
-# -----------------------------------------------------------------------------
-# 2. TRANSLATION & DATA STORE
-# -----------------------------------------------------------------------------
-TRANS = {
-    '中文': {
-        'title': "LexiFlow 法律智能体",
-        'subtitle': "硅谷极简风格 · 全球法律连接 · AI驱动",
-        'sidebar_settings': "设置",
-        'lang_select': "语言 / Language",
-        'persona_select': "选择您的企业/个人画像",
-        'nav_home': "首页概览",
-        'nav_templates': "合同模版 (律师背书)",
-        'nav_consult': "AI 法律咨询",
-        'nav_draft': "AI 文书起草",
-        'nav_lawyers': "找全球律师",
-        'nav_firms': "找全球律所",
-        'personas': ["餐饮/服务业态", "一人公司/自由职业", "出海/跨境电商", "制造业/实体工厂", "大型集团/上市企业"],
-        'welcome': "欢迎回来",
-        'welcome_desc': "根据您的 **{}** 画像，我们为您定制了以下法律服务。",
-        'rec_templates': "推荐模版",
-        'ai_consult_title': "全球法律 AI 咨询",
-        'select_country': "选择法律管辖国家/地区",
-        'input_question': "请输入您的法律问题...",
-        'btn_ask': "开始咨询",
-        'ai_thinking': "AI 正在分析判例与法条...",
-        'draft_title': "智能法律文书起草",
-        'draft_type': "选择文书类型",
-        'draft_details': "输入关键条款/背景信息",
-        'btn_draft': "生成草案",
-        'lawyer_city': "输入城市 (默认: 深圳市)",
-        'lawyer_find': "查找律师",
-        'card_gen': "生成名片",
-        'card_title': "律师电子名片",
-        'firm_country': "输入国家 (默认: 中国)",
-        'firm_find': "查找律所"
+# 语言选项
+LANG_OPTIONS = {
+    "🇨🇳 中文": "zh",
+    "🇺🇸 English": "en"
+}
+
+# 用户画像定义
+USER_PERSONAS = {
+    "zh": {
+        "catering": "🍽️ 餐饮业主",
+        "service": "💆 服务业经营者",
+        "solo": "💻 独立开发者/自由职业者",
+        "overseas": "🚢 出海企业主",
+        "manufacturing": "🏭 制造业经理",
+        "group": "🏢 集团法务"
     },
-    'English': {
-        'title': "LexiFlow Legal AI",
-        'subtitle': "Silicon Valley Minimalist · Global Connect · AI Driven",
-        'sidebar_settings': "Settings",
-        'lang_select': "Language",
-        'persona_select': "Select User Persona",
-        'nav_home': "Dashboard",
-        'nav_templates': "Templates (Verified)",
-        'nav_consult': "AI Consultation",
-        'nav_draft': "AI Drafting",
-        'nav_lawyers': "Global Lawyers",
-        'nav_firms': "Global Law Firms",
-        'personas': ["F&B / Service", "Solopreneur / Freelancer", "Cross-border / Export", "Manufacturing", "Large Enterprise"],
-        'welcome': "Welcome Back",
-        'welcome_desc': "Based on your **{}** profile, we curated these services.",
-        'rec_templates': "Recommended Templates",
-        'ai_consult_title': "Global AI Legal Consultation",
-        'select_country': "Select Jurisdiction",
-        'input_question': "Enter your legal question...",
-        'btn_ask': "Start Consultation",
-        'ai_thinking': "AI is analyzing precedents and statutes...",
-        'draft_title': "AI Document Drafting",
-        'draft_type': "Document Type",
-        'draft_details': "Key Terms / Background Info",
-        'btn_draft': "Generate Draft",
-        'lawyer_city': "Enter City (Default: Shenzhen)",
-        'lawyer_find': "Find Lawyers",
-        'card_gen': "Generate Card",
-        'card_title': "Lawyer Digital Card",
-        'firm_country': "Enter Country (Default: China)",
-        'firm_find': "Find Law Firms"
+    "en": {
+        "catering": "🍽️ Restaurant Owner",
+        "service": "💆 Service Provider",
+        "solo": "💻 Indie Hacker / Freelancer",
+        "overseas": "🚢 Cross-border Founder",
+        "manufacturing": "🏭 Manufacturing Manager",
+        "group": "🏢 Corporate Counsel"
     }
 }
 
-# Persona-based Template Mapping
-TEMPLATE_MAP = {
-    "餐饮/服务业态": ["食品安全责任书", "商铺租赁合同 (利于承租方)", "员工入职合规包", "特许经营协议"],
-    "F&B / Service": ["Food Safety Agreement", "Commercial Lease (Tenant Friendly)", "Employee Handbook", "Franchise Agreement"],
-    "一人公司/自由职业": ["独立承包商协议", "保密协议 (NDA)", "知识产权转让协议", "服务费催收函"],
-    "Solopreneur / Freelancer": ["Independent Contractor Agreement", "NDA", "IP Assignment Deed", "Payment Demand Letter"],
-    "出海/跨境电商": ["GDPR 数据合规声明", "跨境销售条款 (ToS)", "国际物流服务合同", "美国商标注册申请"],
-    "Cross-border / Export": ["GDPR Compliance Statement", "Cross-border Terms of Service", "International Logistics Contract", "US Trademark Application"],
-    "制造业/实体工厂": ["OEM 代工协议", "供应链采购合同", "安全生产责任书", "设备融资租赁合同"],
-    "Manufacturing": ["OEM Agreement", "Supply Chain Purchase Contract", "Safety Liability Agreement", "Equipment Lease"],
-    "大型集团/上市企业": ["股权激励计划 (ESOP)", "并购意向书 (LOI)", "合规反腐败政策", "董事会决议模版"],
-    "Large Enterprise": ["ESOP Plan", "Letter of Intent (M&A)", "Anti-Corruption Policy", "Board Resolution Template"]
+# 推荐模版数据库
+RECOMMENDED_TEMPLATES = {
+    "catering": ["店铺租赁合同", "食品安全承诺书", "员工雇佣协议", "特许经营授权书"],
+    "service": ["服务等级协议 (SLA)", "客户隐私政策", "预付款服务协议", "兼职劳务合同"],
+    "solo": ["软件开发外包合同", "知识产权转让协议", "免责声明 (Disclaimer)", "独立顾问协议"],
+    "overseas": ["跨境数据传输条款", "海外独家代理协议", "GDPR 合规声明", "国际销售合同 (CISG)"],
+    "manufacturing": ["OEM 委托加工合同", "采购框架协议", "安全生产责任书", "保密协议 (NDA)"],
+    "group": ["期权激励计划", "合资经营合同 (JV)", "集团合规章程", "高管聘用协议"]
 }
 
-# -----------------------------------------------------------------------------
-# 3. CUSTOM CSS (SILICON VALLEY MINIMALIST)
-# -----------------------------------------------------------------------------
+# 翻译字典
+TRANSLATIONS = {
+    "zh": {
+        "nav_home": "首页",
+        "nav_network": "人脉",
+        "nav_jobs": "职位",
+        "nav_messaging": "消息",
+        "sidebar_profile": "个人档案",
+        "sidebar_views": "谁看过你的档案",
+        "sidebar_connections": "一度人脉",
+        "tab_consult": "咨询顾问",
+        "tab_templates": "合同库",
+        "tab_lawyers": "寻找专家",
+        "tab_review": "文书审查",
+        "welcome_back": "欢迎回来, ",
+        "start_post": "开始咨询或创建草案...",
+        "suggested_for_you": "为您推荐",
+        "connect_btn": "建立联系",
+        "follow_btn": "关注",
+        "chat_placeholder": "在此输入法律问题...",
+        "target_region_label": "管辖区域",
+        "generate_btn": "AI 起草",
+        "processing": "正在生成中...",
+        "lawyer_card_title": "推荐的法律专家",
+        "upload_text": "上传合同文件 (PDF/Docx)"
+    },
+    "en": {
+        "nav_home": "Home",
+        "nav_network": "My Network",
+        "nav_jobs": "Jobs",
+        "nav_messaging": "Messaging",
+        "sidebar_profile": "Profile",
+        "sidebar_views": "Profile viewers",
+        "sidebar_connections": "Connections",
+        "tab_consult": "Consultant",
+        "tab_templates": "Templates",
+        "tab_lawyers": "Find Experts",
+        "tab_review": "Doc Review",
+        "welcome_back": "Welcome back, ",
+        "start_post": "Start a consultation or draft...",
+        "suggested_for_you": "Suggested for you",
+        "connect_btn": "Connect",
+        "follow_btn": "Follow",
+        "chat_placeholder": "Type your legal question...",
+        "target_region_label": "Jurisdiction",
+        "generate_btn": "Draft with AI",
+        "processing": "Processing...",
+        "lawyer_card_title": "Recommended Legal Experts",
+        "upload_text": "Upload Contract (PDF/Docx)"
+    }
+}
+
+# -------------------------------------------------------------
+# --- 2. CSS 样式 (LinkedIn Style) ---
+# -------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Global Reset & Fonts */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        color: #1f2937;
-        background-color: #ffffff;
-    }
-    
-    /* Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* 引入字体：模拟系统字体栈 */
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #f9fafb;
-        border-right: 1px solid #e5e7eb;
-    }
-    
-    /* Card Component Styling */
-    .st-card {
-        background-color: white;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-        margin-bottom: 1rem;
-        transition: transform 0.2s;
-    }
-    .st-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    :root {
+        --linkedin-blue: #0a66c2;
+        --linkedin-blue-hover: #004182;
+        --bg-color: #f3f2ef;
+        --card-bg: #ffffff;
+        --text-dark: #191919;
+        --text-gray: #666666;
+        --border-color: #e0dfdc;
+        --radius: 8px;
     }
 
-    /* Headings */
-    h1, h2, h3 {
-        font-weight: 600;
-        letter-spacing: -0.025em;
-        color: #111827;
+    /* 全局设置 */
+    .stApp {
+        background-color: var(--bg-color) !important;
+        font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Fira Sans", Ubuntu, Oxygen, "Oxygen Sans", Cantarell, "Droid Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Lucida Grande", Helvetica, Arial, sans-serif !important;
+        color: var(--text-dark);
     }
     
-    /* Buttons */
-    div.stButton > button {
-        background-color: #000000;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
+    /* 隐藏默认 Header */
+    header, footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+
+    /* 顶部导航栏模拟 */
+    .nav-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
         width: 100%;
-        transition: all 0.2s;
+        height: 52px;
+        background: white;
+        border-bottom: 1px solid var(--border-color);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    div.stButton > button:hover {
-        background-color: #374151;
-        color: white;
-        border: none;
+    .nav-logo {
+        font-size: 24px;
+        font-weight: bold;
+        color: var(--linkedin-blue);
+        margin-right: 20px;
     }
     
-    /* Lawyer Card Specifics */
-    .lawyer-card {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 24px;
-        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        max-width: 400px;
-        margin: 0 auto;
-    }
-    .lawyer-avatar {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background-color: #cbd5e1;
+    /* 卡片通用样式 */
+    .li-card {
+        background: var(--card-bg);
+        border-radius: var(--radius);
+        border: 1px solid var(--border-color);
+        padding: 16px;
         margin-bottom: 16px;
+        box-shadow: 0 0 0 1px rgba(0,0,0,0.04); /* 极细微的阴影 */
+    }
+
+    /* 侧边栏样式重写 (Profile Rail) */
+    [data-testid="stSidebar"] {
+        background-color: var(--bg-color) !important;
+        border-right: none;
+    }
+    [data-testid="stSidebar"] .stSelectbox label {
+        color: var(--text-gray);
+        font-size: 0.85rem;
+    }
+    
+    /* 侧边栏个人卡片 */
+    .profile-bg {
+        background: #a0b4b7;
+        height: 60px;
+        border-radius: var(--radius) var(--radius) 0 0;
+        margin: -16px -16px 0 -16px;
+    }
+    .profile-avatar {
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        border: 2px solid white;
+        background: #eee;
+        margin: -36px auto 10px auto;
+        display: block;
+        text-align: center;
+        line-height: 72px;
+        font-size: 30px;
+    }
+    .profile-name {
+        text-align: center;
+        font-weight: 600;
+        font-size: 1.1rem;
+        cursor: pointer;
+    }
+    .profile-name:hover { text-decoration: underline; }
+    .profile-headline {
+        text-align: center;
+        color: var(--text-gray);
+        font-size: 0.85rem;
+        margin-bottom: 15px;
+    }
+    .stats-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.8rem;
+        padding: 4px 0;
+        color: var(--text-gray);
+        font-weight: 600;
+    }
+    .stats-val { color: var(--linkedin-blue); }
+
+    /* Tabs 样式优化 - 类似 LinkedIn 的 Sub-nav */
+    [data-testid="stTabs"] {
+        background: white;
+        border-radius: var(--radius);
+        border: 1px solid var(--border-color);
+        padding: 0 10px;
+    }
+    [data-testid="stTabs"] button {
+        color: var(--text-gray);
+        font-weight: 600;
+        border-bottom: 2px solid transparent;
+        padding: 12px 16px;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        color: var(--linkedin-blue) !important;
+        border-bottom: 2px solid var(--linkedin-blue) !important;
+    }
+
+    /* 按钮样式 - LinkedIn Blue Buttons */
+    .stButton > button {
+        background-color: var(--linkedin-blue) !important;
+        color: white !important;
+        border-radius: 24px !important; /* 胶囊按钮 */
+        border: none !important;
+        font-weight: 600 !important;
+        padding: 6px 16px !important;
+        transition: background 0.2s;
+    }
+    .stButton > button:hover {
+        background-color: var(--linkedin-blue-hover) !important;
+    }
+    /* 次级按钮风格 (通过特定Key区分太复杂，这里统一样式，但在HTML中会有不同) */
+
+    /* 聊天框输入 */
+    .stTextInput > div > div > input {
+        border-radius: 20px;
+        background-color: #eef3f8;
+        border: 1px solid transparent;
+        padding: 10px 15px;
+    }
+    .stTextInput > div > div > input:focus {
+        background-color: white;
+        border-color: var(--text-dark);
+        box-shadow: none;
+    }
+
+    /* 律师卡片 (People Card) */
+    .lawyer-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 12px 0;
+        border-bottom: 1px solid #eee;
+    }
+    .lawyer-item:last-child { border-bottom: none; }
+    .lawyer-img {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: #eef3f8;
+        margin-right: 12px;
+        flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 32px;
-        color: white;
+        font-size: 20px;
     }
-    .lawyer-name { font-size: 1.25rem; font-weight: 700; color: #0f172a; }
-    .lawyer-title { font-size: 0.875rem; color: #64748b; margin-bottom: 16px; }
-    .lawyer-tags span {
-        background-color: #e0f2fe;
-        color: #0284c7;
-        padding: 4px 8px;
-        border-radius: 9999px;
-        font-size: 0.75rem;
-        margin-right: 4px;
-    }
+    .lawyer-info h4 { margin: 0; font-size: 1rem; color: rgba(0,0,0,0.9); }
+    .lawyer-info p { margin: 2px 0; font-size: 0.85rem; color: var(--text-gray); }
     
 </style>
-""", unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 4. HELPER FUNCTIONS
-# -----------------------------------------------------------------------------
-def get_text(key):
-    return TRANS[st.session_state.language][key]
+<div class="nav-bar">
+    <div class="nav-logo">in <span style="font-size:18px; color:#666;">| Legal</span></div>
+    <div style="flex-grow:1;"></div>
+    <div style="font-size:14px; font-weight:600; color:#666; margin-left:20px; cursor:pointer;">Home</div>
+    <div style="font-size:14px; color:#666; margin-left:20px; cursor:pointer;">My Network</div>
+    <div style="font-size:14px; color:#666; margin-left:20px; cursor:pointer;">Jobs</div>
+    <div style="font-size:14px; color:#666; margin-left:20px; cursor:pointer;">Messaging</div>
+</div>
+<div style="height: 40px;"></div> """, unsafe_allow_html=True)
 
-def render_lawyer_card(name, title, firm, specialty, city):
-    return f"""
-    <div class="lawyer-card">
-        <div class="lawyer-avatar">{name[0]}</div>
-        <div class="lawyer-name">{name}</div>
-        <div class="lawyer-title">{title} | {firm}</div>
-        <div class="lawyer-tags" style="margin-bottom: 12px;">
-            <span>Verified</span>
-            <span>AI-Powered</span>
-            <span>{specialty}</span>
-        </div>
-        <p style="font-size: 0.8rem; color: #475569; text-align: center; margin-bottom: 20px;">
-            Based in {city}. Specializing in corporate law and {specialty.lower()}.
-            <br>Providing AI-augmented legal services.
-        </p>
-        <div style="width:100%; border-top: 1px dashed #cbd5e1; margin-bottom:15px;"></div>
-        <div style="display:flex; justify-content:space-between; width:100%; font-size:0.75rem; color:#94a3b8;">
-            <span>ID: #L88392</span>
-            <span>LexiFlow Certified</span>
+
+# -------------------------------------------------------------
+# --- 3. 核心 API 设置 ---
+# -------------------------------------------------------------
+
+api_key = st.secrets.get("GEMINI_API_KEY")
+if not api_key:
+    # 仅为演示，实际应报错
+    pass 
+else:
+    genai.configure(api_key=api_key)
+
+def get_gemini_response(prompt, system_instruction):
+    if not api_key:
+        return "⚠️ Please config API Key to generate content."
+    model = genai.GenerativeModel(
+        model_name='gemini-2.0-flash', 
+        system_instruction=system_instruction
+    )
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Error: {e}"
+
+# -------------------------------------------------------------
+# --- 4. 侧边栏 (Profile Rail) ---
+# -------------------------------------------------------------
+
+with st.sidebar:
+    # 语言选择
+    lang_choice = st.selectbox("Language / 语言", list(LANG_OPTIONS.keys()))
+    lang_code = LANG_OPTIONS[lang_choice]
+    T = TRANSLATIONS[lang_code]
+    
+    # 身份选择
+    persona_options = USER_PERSONAS[lang_code]
+    selected_persona_key = st.selectbox(
+        "Identity", 
+        options=list(persona_options.keys()),
+        format_func=lambda x: persona_options[x]
+    )
+    current_persona_name = persona_options[selected_persona_key]
+
+    # 模拟 LinkedIn 左侧 Profile Rail
+    st.markdown(f"""
+    <div class="li-card" style="padding:0; overflow:hidden;">
+        <div class="profile-bg"></div>
+        <div class="profile-avatar">👨‍💼</div>
+        <div style="padding: 16px;">
+            <div class="profile-name">{current_persona_name}</div>
+            <div class="profile-headline">Premium Legal Member</div>
+            <hr style="margin: 15px 0; border: 0; border-top: 1px solid #eee;">
+            <div class="stats-row">
+                <span>{T['sidebar_views']}</span>
+                <span class="stats-val">42</span>
+            </div>
+            <div class="stats-row">
+                <span>{T['sidebar_connections']}</span>
+                <span class="stats-val">158</span>
+            </div>
+            <hr style="margin: 15px 0; border: 0; border-top: 1px solid #eee;">
+            <div style="font-size:0.8rem; font-weight:600; color:#000;">
+                ⭐ Saved Items
+            </div>
         </div>
     </div>
-    """
+    """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 5. SIDEBAR
-# -----------------------------------------------------------------------------
-with st.sidebar:
-    st.markdown(f"## {get_text('sidebar_settings')}")
-    
-    # Language Toggle
-    lang_choice = st.radio(
-        get_text('lang_select'), 
-        ['中文', 'English'], 
-        index=0 if st.session_state.language == '中文' else 1
-    )
-    if lang_choice != st.session_state.language:
-        st.session_state.language = lang_choice
-        st.rerun()
+    # 模拟 "Recent" 模块
+    st.markdown(f"""
+    <div class="li-card">
+        <div style="font-size:0.8rem; margin-bottom:10px;"><b>Recent</b></div>
+        <div style="font-size:0.8rem; color:#666; margin-bottom:5px;"># commercial_law</div>
+        <div style="font-size:0.8rem; color:#666; margin-bottom:5px;"># {selected_persona_key}_trends</div>
+        <div style="font-size:0.8rem; color:#666; margin-bottom:5px;">👥 Legal Tech Group</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    
-    # Persona Selection
-    st.markdown(f"### {get_text('persona_select')}")
-    selected_persona_index = 0
-    persona = st.selectbox(
-        "Persona", 
-        get_text('personas'),
-        label_visibility="collapsed"
-    )
-    
-    st.markdown("---")
-    
-    # Navigation
-    nav_options = [
-        get_text('nav_home'),
-        get_text('nav_templates'),
-        get_text('nav_consult'),
-        get_text('nav_draft'),
-        get_text('nav_lawyers'),
-        get_text('nav_firms')
-    ]
-    selection = st.radio("Navigation", nav_options, label_visibility="collapsed")
+# -------------------------------------------------------------
+# --- 5. 主界面 (Feed & Dashboard) ---
+# -------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# 6. MAIN CONTENT
-# -----------------------------------------------------------------------------
+# 初始化 Session State
+if "messages" not in st.session_state or st.session_state.get("current_persona") != current_persona_name:
+    st.session_state.messages = []
+    st.session_state.current_persona = current_persona_name
 
-# Header
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.title(get_text('title'))
-    st.caption(get_text('subtitle'))
-with col2:
-    # Just visual balance
-    pass
+# System Instructions
+consultant_instruction = f"""
+Role: Professional Legal Consultant named Judi on a professional network platform.
+User: {current_persona_name}.
+Tone: Professional, concise, helpful, like a senior partner at a top firm.
+"""
 
-st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+# Tabs 布局 - 模拟主内容导航
+tab1, tab2, tab3, tab4 = st.tabs([
+    f"💬 {T['tab_consult']}", 
+    f"📄 {T['tab_templates']}", 
+    f"👥 {T['tab_lawyers']}",
+    f"🛡️ {T['tab_review']}"
+])
 
-# --- HOME DASHBOARD ---
-if selection == get_text('nav_home'):
-    st.subheader(f"{get_text('welcome')} 👋")
-    st.info(get_text('welcome_desc').format(persona))
-    
-    # Dashboard Grid
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"""
-        <div class="st-card">
-            <h4>📄 {get_text('nav_templates')}</h4>
-            <p style="color:#666; font-size:0.9rem">Access verified contracts tailored for {persona}.</p>
+# --- Tab 1: 法律顾问 (Messaging/Feed Style) ---
+with tab1:
+    # 模拟 "Start a post" 区域作为输入框提示
+    st.markdown(f"""
+    <div class="li-card" style="display:flex; align-items:center;">
+        <div style="width:48px; height:48px; border-radius:50%; background:#eee; margin-right:15px; display:flex; align-items:center; justify-content:center;">👨‍💼</div>
+        <div style="flex-grow:1; border:1px solid #ccc; border-radius:30px; padding:12px 20px; color:#666; font-weight:600;">
+            {T['start_post']}
         </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"""
-        <div class="st-card">
-            <h4>🤖 {get_text('nav_consult')}</h4>
-            <p style="color:#666; font-size:0.9rem">24/7 AI legal advice across multiple jurisdictions.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"""
-        <div class="st-card">
-            <h4>🌍 {get_text('nav_lawyers')}</h4>
-            <p style="color:#666; font-size:0.9rem">Connect with experts in Shenzhen, New York, London...</p>
-        </div>
-        """, unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
-# --- CONTRACT TEMPLATES ---
-elif selection == get_text('nav_templates'):
-    st.subheader(get_text('rec_templates'))
-    st.markdown("Logic: *Lawyer verified templates based on your selected industry persona.*")
+    # 聊天区域
+    col1, col2 = st.columns([3, 1]) # 右侧留白或放广告位
     
-    templates = TEMPLATE_MAP.get(persona, [])
-    
-    for temp in templates:
-        with st.container():
-            c1, c2 = st.columns([4, 1])
-            with c1:
-                st.markdown(f"**📄 {temp}**")
-                st.caption("Updated: 2023-10 | Verified by: King & Wood Mallesons (Mock)")
-            with c2:
-                st.button("Download", key=temp)
-            st.divider()
-
-# --- AI CONSULTATION ---
-elif selection == get_text('nav_consult'):
-    st.subheader(get_text('ai_consult_title'))
-    
-    col_a, col_b = st.columns([1, 2])
-    with col_a:
-        country = st.selectbox(get_text('select_country'), ["China", "USA", "Singapore", "UK", "Japan", "EU"])
-    
-    user_input = st.text_area(get_text('input_question'), height=150)
-    
-    if st.button(get_text('btn_ask')):
-        if not user_input:
-            st.warning("Please enter a question.")
-        else:
-            with st.spinner(get_text('ai_thinking')):
-                time.sleep(1.5) # Simulate API latency
-                st.markdown("### AI Analysis:")
-                
-                # Mock AI Response
-                response_text = ""
-                if st.session_state.language == '中文':
-                    response_text = f"基于**{country}**的法律框架，针对您的问题：\n\n1. **适用法律**: 根据{country}合同法及相关判例...\n2. **风险提示**: 您需要注意条款中的免责声明...\n3. **建议行动**: 建议在起诉前先发送律师函..."
-                else:
-                    response_text = f"Based on **{country}** legal framework regarding your query:\n\n1. **Applicable Law**: According to {country} Contract Law and relevant precedents...\n2. **Risk Warning**: Pay attention to the liability exemption clauses...\n3. **Recommended Action**: It is advisable to send a Cease & Desist letter before litigation..."
-                
-                placeholder = st.empty()
-                streamed_text = ""
-                for char in response_text:
-                    streamed_text += char
-                    placeholder.markdown(streamed_text)
-                    time.sleep(0.01)
-
-# --- AI DRAFTING ---
-elif selection == get_text('nav_draft'):
-    st.subheader(get_text('draft_title'))
-    
-    doc_type = st.selectbox(get_text('draft_type'), ["NDA (保密协议)", "Employment Contract (雇佣合同)", "Service Agreement (服务协议)", "Cease & Desist (律师函)"])
-    details = st.text_area(get_text('draft_details'), height=100)
-    
-    if st.button(get_text('btn_draft')):
-        with st.spinner("Drafting..."):
-            time.sleep(2)
-            st.success("Draft Generated Successfully!")
-            st.code(f"""
-            [DRAFT - {doc_type.upper()}]
-            
-            THIS AGREEMENT is made on {time.strftime("%Y-%m-%d")}...
-            
-            BETWEEN:
-            [Party A] AND [Party B]
-            
-            WHEREAS:
-            {details if details else "[Insert Background Information Here]"}
-            
-            1. DEFINITIONS
-            ...
-            
-            2. CONFIDENTIALITY
-            ...
-            
-            (Signed by AI Legal Agent)
-            """, language='markdown')
-
-# --- FIND LAWYERS ---
-elif selection == get_text('nav_lawyers'):
-    st.subheader(get_text('lawyer_find'))
-    
-    l_col1, l_col2 = st.columns([3, 1])
-    with l_col1:
-        # Default City: Shenzhen
-        city = st.text_input(get_text('lawyer_city'), value="Shenzhen" if st.session_state.language != '中文' else "深圳市")
-    with l_col2:
-        st.write("")
-        st.write("") # Spacing
-        search_btn = st.button("Search")
+    with col1:
+        # 目标区域设定
+        target_country = st.text_input(T["target_region_label"], value="China" if lang_code == 'en' else "中国")
         
-    st.markdown("---")
-    
-    # Mock Lawyers Data
-    mock_lawyers = [
-        {"name": "Alice Chen", "title": "Senior Partner", "firm": "Global Law Network", "specialty": "IP & Tech", "city": city},
-        {"name": "David Wang", "title": "Associate", "firm": "Shenzhen Legal Hub", "specialty": "Corporate", "city": city},
-        {"name": "Sarah Smith", "title": "Legal Counsel", "firm": "Cross-Border Solutions", "specialty": "International Trade", "city": city}
-    ]
-    
-    # Display Results
-    for idx, lawyer in enumerate(mock_lawyers):
-        with st.container():
-            c1, c2, c3 = st.columns([1, 4, 2])
-            with c1:
-                st.markdown(f"<div style='width:50px; height:50px; background:#eee; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold;'>{lawyer['name'][0]}</div>", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"**{lawyer['name']}**")
-                st.caption(f"{lawyer['title']} @ {lawyer['firm']}")
-                st.caption(f"📍 {lawyer['city']} | 🏷️ {lawyer['specialty']}")
-            with c3:
-                # Generate Card Button logic
-                if st.button(get_text('card_gen'), key=f"btn_card_{idx}"):
-                    st.session_state.generated_card = lawyer
-            st.divider()
-
-    # Modal/Expander for Business Card
-    if st.session_state.generated_card:
-        st.markdown(f"### {get_text('card_title')}")
-        card_html = render_lawyer_card(
-            st.session_state.generated_card['name'],
-            st.session_state.generated_card['title'],
-            st.session_state.generated_card['firm'],
-            st.session_state.generated_card['specialty'],
-            st.session_state.generated_card['city']
-        )
-        st.markdown(card_html, unsafe_allow_html=True)
-        
-        c_act1, c_act2 = st.columns(2)
-        with c_act1:
-            st.button("📥 Save to Contacts (vCard)", key="dl_card")
-        with c_act2:
-            st.button("💬 Chat with AI Agent", key="chat_agent")
-
-# --- FIND LAW FIRMS ---
-elif selection == get_text('nav_firms'):
-    st.subheader(get_text('firm_find'))
-    
-    f_col1, f_col2 = st.columns([3, 1])
-    with f_col1:
-        # Default Country: China
-        country_firm = st.text_input(get_text('firm_country'), value="China" if st.session_state.language != '中文' else "中国")
-    
-    st.markdown("### Top Ranked Firms")
-    
-    firms = [
-        "King & Wood Mallesons (金杜律师事务所)",
-        "Zhong Lun Law Firm (中伦律师事务所)",
-        "JunHe LLP (君合律师事务所)",
-        "Dentons (大成)"
-    ]
-    
-    for f in firms:
-        st.markdown(f"""
-        <div class="st-card" style="display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <span style="font-weight:bold; font-size:1.1rem;">{f}</span><br>
-                <span style="color:#666; font-size:0.85rem;">Headquarters: {country_firm} | Rating: ⭐⭐⭐⭐⭐</span>
+        # 历史消息显示
+        for msg in st.session_state.messages:
+            avatar = "🤖" if msg["role"] == "assistant" else "👨‍💼"
+            bg_color = "#f3f6f8" if msg["role"] == "assistant" else "#ffffff"
+            align = "flex-start" 
+            
+            st.markdown(f"""
+            <div class="li-card" style="display:flex; flex-direction:row; gap:10px; background:{bg_color}; border:none;">
+                <div style="font-size:24px;">{avatar}</div>
+                <div style="flex-grow:1;">
+                    <div style="font-weight:700; font-size:0.9rem; margin-bottom:4px;">
+                        {'Judi (AI Legal Partner)' if msg['role']=='assistant' else 'You'}
+                    </div>
+                    <div style="font-size:0.95rem; line-height:1.5;">{msg['content']}</div>
+                </div>
             </div>
-            <button style="background:transparent; border:1px solid #ddd; padding:5px 10px; border-radius:4px; cursor:pointer;">View Profile</button>
+            """, unsafe_allow_html=True)
+
+        # 输入框
+        with st.form("chat_form", clear_on_submit=True):
+            user_input = st.text_input("", placeholder=T["chat_placeholder"], label_visibility="collapsed")
+            col_actions = st.columns([6, 1])
+            with col_actions[1]:
+                submitted = st.form_submit_button("Send ✈️")
+
+        if submitted and user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            # 模拟回复
+            with st.spinner(T["processing"]):
+                full_instruction = consultant_instruction + f" Target Jurisdiction: {target_country}."
+                ai_reply = get_gemini_response(user_input, full_instruction)
+                st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+            st.rerun()
+
+    with col2:
+        # 模拟右侧推荐栏 (LinkedIn Right Rail)
+        st.markdown(f"""
+        <div class="li-card">
+            <div style="font-size:0.9rem; font-weight:600; margin-bottom:12px;">{T['suggested_for_you']}</div>
+            <div style="display:flex; margin-bottom:10px;">
+                <div style="width:40px; height:40px; background:#ddd; margin-right:10px;"></div>
+                <div>
+                    <div style="font-size:0.85rem; font-weight:600;">Legal Tech Daily</div>
+                    <button style="border:1px solid #666; background:none; border-radius:15px; padding:2px 10px; font-size:0.8rem; margin-top:2px;">+ {T['follow_btn']}</button>
+                </div>
+            </div>
+             <div style="display:flex;">
+                <div style="width:40px; height:40px; background:#ddd; margin-right:10px;"></div>
+                <div>
+                    <div style="font-size:0.85rem; font-weight:600;">Global Compliance</div>
+                    <button style="border:1px solid #666; background:none; border-radius:15px; padding:2px 10px; font-size:0.8rem; margin-top:2px;">+ {T['follow_btn']}</button>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# --- Tab 2: 合同模版 (Job/Course Cards Style) ---
+with tab2:
+    st.markdown(f"### {T['suggested_for_you']}")
+    rec_list = RECOMMENDED_TEMPLATES.get(selected_persona_key, [])
+    
+    # Grid Layout
+    cols = st.columns(2)
+    for idx, template_name in enumerate(rec_list):
+        with cols[idx % 2]:
+            with st.container():
+                st.markdown(f"""
+                <div class="li-card">
+                    <div style="display:flex; justify-content:space-between;">
+                        <div style="width:48px; height:48px; background:#eef3f8; display:flex; align-items:center; justify-content:center; border-radius:4px;">
+                            📄
+                        </div>
+                        <div style="color:#666; font-size:1.2rem;">...</div>
+                    </div>
+                    <div style="margin-top:10px; font-weight:600; font-size:1.1rem; color:var(--linkedin-blue);">
+                        {template_name}
+                    </div>
+                    <div style="font-size:0.9rem; color:#666; margin-bottom:15px;">
+                        Standard • {current_persona_name} • Verified
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button(T['generate_btn'], key=f"tpl_{idx}", use_container_width=True):
+                    # 模拟生成逻辑
+                    st.success(f"Drafting {template_name}...")
+                    st.code("# DRAFT AGREEMENT\n\n1. PARTIES...", language="markdown")
+
+
+# --- Tab 3: 找律师 (People/Network Style) ---
+with tab3:
+    st.markdown(f"""
+    <div class="li-card">
+        <h3>{T['lawyer_card_title']}</h3>
+        <p style="color:#666; font-size:0.9rem;">Based on your profile: <b>{current_persona_name}</b></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        # 生成两个模拟律师数据
+        mock_lawyers = [
+            {"name": "Sarah Chen", "title": "Partner @ Global Law", "desc": "Specialist in Corporate Law & IP Protection"},
+            {"name": "David Müller", "title": "Senior Counsel", "desc": "Expert in Cross-border Trade & EU Compliance"}
+        ]
+        
+        for lw in mock_lawyers:
+            # 模拟 LinkedIn "People" 卡片
+            st.markdown(f"""
+            <div class="li-card lawyer-item">
+                <div class="lawyer-img">{lw['name'][0]}</div>
+                <div class="lawyer-info" style="flex-grow:1;">
+                    <h4>{lw['name']} <span style="font-weight:400; color:#666; font-size:0.8rem;">• 2nd</span></h4>
+                    <p>{lw['title']}</p>
+                    <p style="color:#666; font-size:0.8rem;">{lw['desc']}</p>
+                    <div style="margin-top:5px; font-size:0.8rem; color:#666;">
+                        <span style="display:inline-block; vertical-align:middle;">👥</span> 12 mutual connections
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            col_btn, _ = st.columns([1, 4])
+            with col_btn:
+                st.button(f"👤 {T['connect_btn']}", key=f"connect_{lw['name']}")
+
+    with c2:
+        st.image("https://placehold.co/300x250/png?text=Ad:+Legal+Conf+2025", caption="Promoted", use_column_width=True)
+
+
+# --- Tab 4: 文书审查 (Document UI) ---
+with tab4:
+    st.markdown(f"""
+    <div class="li-card" style="text-align:center; padding:40px 20px;">
+        <div style="font-size:40px; margin-bottom:20px;">📂</div>
+        <h3 style="color:#000;">{T['upload_text']}</h3>
+        <p style="color:#666; margin-bottom:20px;">
+            Get AI-powered risk analysis instantly. Private & Secure.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    uploaded_file = st.file_uploader("", label_visibility="collapsed")
+    
+    if uploaded_file:
+        st.info("Document uploaded. Analyzing risk factors...")
+        # 模拟结果展示
+        st.markdown("""
+        <div class="li-card">
+            <h4 style="color:#d93025;">Risk Level: Medium ⚠️</h4>
+            <hr>
+            <p><b>Analysis Report:</b></p>
+            <ul>
+                <li>Clause 4.2 contains ambiguous liability terms.</li>
+                <li>Missing jurisdiction definition for cross-border disputes.</li>
+            </ul>
         </div>
         """, unsafe_allow_html=True)
