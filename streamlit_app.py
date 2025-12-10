@@ -1,505 +1,484 @@
 import streamlit as st
-import google.generativeai as genai
-import io
-import json
-import datetime
-import os
-import docx
+import time
+import random
 
-# -------------------------------------------------------------
-# --- 1. 配置与多语言/画像定义 ---
-# -------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 1. PAGE CONFIGURATION & STATE MANAGEMENT
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="LexiFlow - Global Legal AI",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# 设置页面配置 - 保持不变
-st.set_page_config(page_title="iTerms 法律顾问", page_icon="⚖️", layout="wide")
+# Initialize Session State
+if 'language' not in st.session_state:
+    st.session_state.language = '中文'
+if 'generated_card' not in st.session_state:
+    st.session_state.generated_card = None
 
-# 语言选项 - 保持不变
-LANG_OPTIONS = {
-    "🇨🇳 中文": "zh",
-    "🇺🇸 English": "en"
-}
-
-# 用户画像定义 (不同画像对应不同的推荐模版和关注点) - 保持不变
-USER_PERSONAS = {
-    "zh": {
-        "catering": "🍽️ 餐饮业态",
-        "service": "💆 服务业态",
-        "solo": "💻 一人公司/独立开发者",
-        "overseas": "🚢 出海企业 (Cross-border)",
-        "manufacturing": "🏭 制造业",
-        "group": "🏢 大型集团"
+# -----------------------------------------------------------------------------
+# 2. TRANSLATION & DATA STORE
+# -----------------------------------------------------------------------------
+TRANS = {
+    '中文': {
+        'title': "LexiFlow 法律智能体",
+        'subtitle': "硅谷极简风格 · 全球法律连接 · AI驱动",
+        'sidebar_settings': "设置",
+        'lang_select': "语言 / Language",
+        'persona_select': "选择您的企业/个人画像",
+        'nav_home': "首页概览",
+        'nav_templates': "合同模版 (律师背书)",
+        'nav_consult': "AI 法律咨询",
+        'nav_draft': "AI 文书起草",
+        'nav_lawyers': "找全球律师",
+        'nav_firms': "找全球律所",
+        'personas': ["餐饮/服务业态", "一人公司/自由职业", "出海/跨境电商", "制造业/实体工厂", "大型集团/上市企业"],
+        'welcome': "欢迎回来",
+        'welcome_desc': "根据您的 **{}** 画像，我们为您定制了以下法律服务。",
+        'rec_templates': "推荐模版",
+        'ai_consult_title': "全球法律 AI 咨询",
+        'select_country': "选择法律管辖国家/地区",
+        'input_question': "请输入您的法律问题...",
+        'btn_ask': "开始咨询",
+        'ai_thinking': "AI 正在分析判例与法条...",
+        'draft_title': "智能法律文书起草",
+        'draft_type': "选择文书类型",
+        'draft_details': "输入关键条款/背景信息",
+        'btn_draft': "生成草案",
+        'lawyer_city': "输入城市 (默认: 深圳市)",
+        'lawyer_find': "查找律师",
+        'card_gen': "生成名片",
+        'card_title': "律师电子名片",
+        'firm_country': "输入国家 (默认: 中国)",
+        'firm_find': "查找律所"
     },
-    "en": {
-        "catering": "🍽️ Catering/Restaurant",
-        "service": "💆 Service Industry",
-        "solo": "💻 Solopreneur/Indie Hacker",
-        "overseas": "🚢 Cross-border Enterprise",
-        "manufacturing": "🏭 Manufacturing",
-        "group": "🏢 Large Corporation"
+    'English': {
+        'title': "LexiFlow Legal AI",
+        'subtitle': "Silicon Valley Minimalist · Global Connect · AI Driven",
+        'sidebar_settings': "Settings",
+        'lang_select': "Language",
+        'persona_select': "Select User Persona",
+        'nav_home': "Dashboard",
+        'nav_templates': "Templates (Verified)",
+        'nav_consult': "AI Consultation",
+        'nav_draft': "AI Drafting",
+        'nav_lawyers': "Global Lawyers",
+        'nav_firms': "Global Law Firms",
+        'personas': ["F&B / Service", "Solopreneur / Freelancer", "Cross-border / Export", "Manufacturing", "Large Enterprise"],
+        'welcome': "Welcome Back",
+        'welcome_desc': "Based on your **{}** profile, we curated these services.",
+        'rec_templates': "Recommended Templates",
+        'ai_consult_title': "Global AI Legal Consultation",
+        'select_country': "Select Jurisdiction",
+        'input_question': "Enter your legal question...",
+        'btn_ask': "Start Consultation",
+        'ai_thinking': "AI is analyzing precedents and statutes...",
+        'draft_title': "AI Document Drafting",
+        'draft_type': "Document Type",
+        'draft_details': "Key Terms / Background Info",
+        'btn_draft': "Generate Draft",
+        'lawyer_city': "Enter City (Default: Shenzhen)",
+        'lawyer_find': "Find Lawyers",
+        'card_gen': "Generate Card",
+        'card_title': "Lawyer Digital Card",
+        'firm_country': "Enter Country (Default: China)",
+        'firm_find': "Find Law Firms"
     }
 }
 
-# 推荐模版数据库 (根据画像推荐) - 保持不变
-RECOMMENDED_TEMPLATES = {
-    "catering": ["餐厅租赁合同", "食品安全责任书", "厨房员工雇佣合同", "特许经营协议"],
-    "service": ["服务服务协议 (SLA)", "客户隐私保密协议", "会员充值协议", "兼职劳务合同"],
-    "solo": ["软件外包开发合同", "知识产权转让协议", "免责声明 (Disclaimer)", "单人公司章程"],
-    "overseas": ["跨境数据传输协议", "海外代理商分销合同", "GDPR合规声明", "国际货物销售合同 (CISG)"],
-    "manufacturing": ["OEM代工生产协议", "原材料采购合同", "工厂安全生产责任书", "供应链保密协议 (NDA)"],
-    "group": ["股权激励计划书", "合资经营合同 (JV)", "企业合规管理章程", "高管聘用协议"]
+# Persona-based Template Mapping
+TEMPLATE_MAP = {
+    "餐饮/服务业态": ["食品安全责任书", "商铺租赁合同 (利于承租方)", "员工入职合规包", "特许经营协议"],
+    "F&B / Service": ["Food Safety Agreement", "Commercial Lease (Tenant Friendly)", "Employee Handbook", "Franchise Agreement"],
+    "一人公司/自由职业": ["独立承包商协议", "保密协议 (NDA)", "知识产权转让协议", "服务费催收函"],
+    "Solopreneur / Freelancer": ["Independent Contractor Agreement", "NDA", "IP Assignment Deed", "Payment Demand Letter"],
+    "出海/跨境电商": ["GDPR 数据合规声明", "跨境销售条款 (ToS)", "国际物流服务合同", "美国商标注册申请"],
+    "Cross-border / Export": ["GDPR Compliance Statement", "Cross-border Terms of Service", "International Logistics Contract", "US Trademark Application"],
+    "制造业/实体工厂": ["OEM 代工协议", "供应链采购合同", "安全生产责任书", "设备融资租赁合同"],
+    "Manufacturing": ["OEM Agreement", "Supply Chain Purchase Contract", "Safety Liability Agreement", "Equipment Lease"],
+    "大型集团/上市企业": ["股权激励计划 (ESOP)", "并购意向书 (LOI)", "合规反腐败政策", "董事会决议模版"],
+    "Large Enterprise": ["ESOP Plan", "Letter of Intent (M&A)", "Anti-Corruption Policy", "Board Resolution Template"]
 }
 
-# 翻译字典 - 保持不变
-TRANSLATIONS = {
-    "zh": {
-        "app_title": "iTerms 法律顾问",
-        "subtitle": "全球法律智慧，服务每位客户",
-        "sidebar_settings": "设置",
-        "select_persona": "选择你的企业身份",
-        "select_persona_help": "AI将根据你的身份提供定制化法律建议",
-        "tab_consult": "🤖 AI法律顾问",
-        "tab_templates": "📄 合同模版",
-        "tab_lawyers": "🌍 找全球律师/律所",
-        "tab_review": "📂 文书审查",
-        "target_region": "目标法律管辖区/国家",
-        "chat_placeholder": "输入你的法律问题，例如：如何在这个国家设立分公司？",
-        "template_intro": "基于您的 **{persona}** 身份，为您推荐以下律师背书级别的模版：",
-        "generate_btn": "AI 起草该文书",
-        "lawyer_search_title": "连接全球法律网络",
-        "lawyer_city": "目标城市 (默认: 深圳市)",
-        "lawyer_area": "需要咨询的领域",
-        "find_lawyer_btn": "生成律师名片",
-        "processing": "AI 正在思考中...",
-        "upload_area": "上传合同/法律文件 (PDF/Word/Txt)",
-        "review_btn": "开始风险审查",
-        "review_result_title": "审查报告",
-        "welcome_msg": "你好，我是Judi。作为**{persona}**的法律顾问，今天只需一杯咖啡的时间，我就能帮你解决法律难题。",
-        "lawyer_card_intro": "为您匹配到以下律师资源：",
-        "consult_agent": "咨询该律师智能体"
-    },
-    "en": {
-        "app_title": "iTerms Legal Advisor",
-        "subtitle": "Global Legal Intelligence, 24/7 Service for Every Client",
-        "sidebar_settings": "Settings",
-        "select_persona": "Select User Persona",
-        "select_persona_help": "AI tailored legal advice based on your profile",
-        "tab_consult": "🤖 AI Consultant",
-        "tab_templates": "📄 Templates",
-        "tab_lawyers": "🌍 Find Lawyers",
-        "tab_review": "📂 Doc Review",
-        "target_region": "Target Jurisdiction/Country",
-        "chat_placeholder": "Ask a legal question, e.g., How to incorporate here?",
-        "template_intro": "Based on your **{persona}** profile, here are lawyer-endorsed templates:",
-        "generate_btn": "Draft with AI",
-        "lawyer_search_title": "Connect Global Legal Network",
-        "lawyer_city": "Target City (Default: Shenzhen)",
-        "lawyer_area": "Practice Area",
-        "find_lawyer_btn": "Generate Lawyer Card",
-        "processing": "AI is thinking...",
-        "upload_area": "Upload Document (PDF/Word/Txt)",
-        "review_btn": "Start Risk Review",
-        "review_result_title": "Review Report",
-        "welcome_msg": "Hi, I'm Judi. As a legal consultant for **{persona}**, I can solve your legal challenges in the time it takes to drink a coffee.",
-        "lawyer_card_intro": "Matched Legal Resource:",
-        "consult_agent": "Chat with Agent"
-    }
-}
-
-# -------------------------------------------------------------
-# --- 2. CSS 样式 (Silicon Valley Minimalist V2) ---
-# -------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 3. CUSTOM CSS (SILICON VALLEY MINIMALIST)
+# -----------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* 定义品牌色和辅助色 */
-    :root {
-        --primary-color: #007bff; /* 原本的黑色按钮改为更专业的深蓝 */
-        --accent-color: #2563eb; /* 深青色，用于高亮 */
-        --bg-light: #f8fafc;
-        --border-color: #e2e8f0;
-        --text-color: #1a202c;
-        --text-secondary: #64748b;
-        --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    /* Global Reset & Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        color: #1f2937;
+        background-color: #ffffff;
     }
     
-    /* 全局字体与背景 */
-    .stApp {
-        background-color: #ffffff !important;
-        /* 强调现代化字体堆栈 */
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
-        color: var(--text-color);
+    /* Hide Streamlit Branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #f9fafb;
+        border-right: 1px solid #e5e7eb;
     }
     
-    /* 隐藏多余元素 */
-    header, footer, [data-testid="stToolbar"] {visibility: hidden;}
-    
-    /* 标题样式 */
-    h1 {
-        font-weight: 800 !important; /* 更粗体 */
-        letter-spacing: -0.04em !important; /* 调整字距 */
-        color: var(--text-color) !important;
-        font-size: 2.8rem !important; /* 略大 */
-        margin-bottom: 0.5rem !important;
+    /* Card Component Styling */
+    .st-card {
+        background-color: white;
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        margin-bottom: 1rem;
+        transition: transform 0.2s;
     }
-    
-    .subtitle {
-        color: var(--text-secondary);
-        font-size: 1.1rem;
-        font-weight: 400;
-        margin-bottom: 2.5rem; /* 增加下方留白 */
+    .st-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     }
 
-    /* 侧边栏优化 */
-    [data-testid="stSidebar"] {
-        background-color: var(--bg-light) !important;
-        border-right: 1px solid var(--border-color);
+    /* Headings */
+    h1, h2, h3 {
+        font-weight: 600;
+        letter-spacing: -0.025em;
+        color: #111827;
     }
-
-    /* 卡片式布局 */
-    .card {
-        background: #ffffff;
-        border: 1px solid var(--border-color);
+    
+    /* Buttons */
+    div.stButton > button {
+        background-color: #000000;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        width: 100%;
+        transition: all 0.2s;
+    }
+    div.stButton > button:hover {
+        background-color: #374151;
+        color: white;
+        border: none;
+    }
+    
+    /* Lawyer Card Specifics */
+    .lawyer-card {
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 24px;
-        box-shadow: var(--card-shadow);
-        margin-bottom: 20px;
-        transition: all 0.2s;
-        min-height: 150px; /* 确保最小高度统一 */
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        max-width: 400px;
+        margin: 0 auto;
     }
-    .card:hover {
-        border-color: var(--accent-color);
-        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.1);
-        transform: translateY(-3px);
+    .lawyer-avatar {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background-color: #cbd5e1;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 32px;
+        color: white;
     }
-
-    /* Tab 样式优化 */
-    [data-testid="stTabs"] button[aria-selected="true"] {
-        color: var(--accent-color) !important;
-        border-bottom: 3px solid var(--accent-color) !important;
-        font-weight: 600;
-    }
-    [data-testid="stTabs"] button {
-        color: var(--text-secondary);
-        font-weight: 500;
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
-    }
-
-    /* 律师名片样式 */
-    .lawyer-card {
-        border: 1px solid var(--border-color);
-        border-left: 4px solid var(--accent-color); /* 使用品牌色高亮 */
-        background: #f0f4ff; /* 略微带蓝的背景 */
-        padding: 20px;
-        border-radius: 8px;
-        margin-top: 15px;
-    }
-    .lawyer-name { font-weight: 700; font-size: 1.3rem; color: #1e293b; }
-    .lawyer-title { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 10px; }
-    .tag {
-        background: #e0f2fe;
-        color: #0369a1;
-        font-weight: 600;
-    }
-
-    /* 按钮样式重置 */
-    .stButton > button {
-        background-color: var(--primary-color) !important;
-        color: #ffffff !important;
-        border-radius: 8px !important;
-        border: none !important;
-        padding: 0.5rem 1rem !important;
-        font-weight: 600 !important; /* 略微加粗 */
-    }
-    .stButton > button:hover {
-        background-color: #0056b3 !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    .lawyer-name { font-size: 1.25rem; font-weight: 700; color: #0f172a; }
+    .lawyer-title { font-size: 0.875rem; color: #64748b; margin-bottom: 16px; }
+    .lawyer-tags span {
+        background-color: #e0f2fe;
+        color: #0284c7;
+        padding: 4px 8px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        margin-right: 4px;
     }
     
-    /* 聊天输入框美化 */
-    [data-testid="stForm"] {
-        padding: 0px; 
-        border: none;
-        box-shadow: none;
-    }
-    /* 确保聊天输入框在底部且突出 */
-    div.stTextInput>div>div>input {
-        border-radius: 12px;
-        padding: 12px 18px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    }
 </style>
 """, unsafe_allow_html=True)
 
+# -----------------------------------------------------------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
+def get_text(key):
+    return TRANS[st.session_state.language][key]
 
-# -------------------------------------------------------------
-# --- 3. 核心逻辑与 API ---
-# -------------------------------------------------------------
+def render_lawyer_card(name, title, firm, specialty, city):
+    return f"""
+    <div class="lawyer-card">
+        <div class="lawyer-avatar">{name[0]}</div>
+        <div class="lawyer-name">{name}</div>
+        <div class="lawyer-title">{title} | {firm}</div>
+        <div class="lawyer-tags" style="margin-bottom: 12px;">
+            <span>Verified</span>
+            <span>AI-Powered</span>
+            <span>{specialty}</span>
+        </div>
+        <p style="font-size: 0.8rem; color: #475569; text-align: center; margin-bottom: 20px;">
+            Based in {city}. Specializing in corporate law and {specialty.lower()}.
+            <br>Providing AI-augmented legal services.
+        </p>
+        <div style="width:100%; border-top: 1px dashed #cbd5e1; margin-bottom:15px;"></div>
+        <div style="display:flex; justify-content:space-between; width:100%; font-size:0.75rem; color:#94a3b8;">
+            <span>ID: #L88392</span>
+            <span>LexiFlow Certified</span>
+        </div>
+    </div>
+    """
 
-api_key = st.secrets.get("GEMINI_API_KEY")
-if not api_key:
-    st.error("Missing API Key")
-    st.stop()
-genai.configure(api_key=api_key)
-
-# 确保模型调用逻辑不变
-def get_gemini_response(prompt, system_instruction):
-    # 增加 stream=True 以优化用户体验（更快的响应）
-    model = genai.GenerativeModel(
-        model_name='gemini-2.0-flash', 
-        system_instruction=system_instruction
-    )
-    # 使用 generate_content 确保兼容性
-    response = model.generate_content(prompt)
-    return response.text
-
-# -------------------------------------------------------------
-# --- 4. 侧边栏设置 (UX 优化：Logo 放在顶部) ---
-# -------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
+# 5. SIDEBAR
+# -----------------------------------------------------------------------------
 with st.sidebar:
-    # 替换为更专业的 Logo 或 Icon
-    st.markdown("## ⚖️ iTerms Legal")
-    st.markdown("---")
+    st.markdown(f"## {get_text('sidebar_settings')}")
     
-    # 语言选择
-    lang_choice = st.selectbox("🌐 Language", list(LANG_OPTIONS.keys()))
-    lang_code = LANG_OPTIONS[lang_choice]
-    T = TRANSLATIONS[lang_code]
-    
-    st.markdown("---")
-    st.subheader(T["sidebar_settings"])
-    
-    # 用户画像选择
-    persona_options = USER_PERSONAS[lang_code]
-    selected_persona_key = st.selectbox(
-        T["select_persona"], 
-        options=list(persona_options.keys()),
-        format_func=lambda x: persona_options[x],
-        help=T["select_persona_help"]
+    # Language Toggle
+    lang_choice = st.radio(
+        get_text('lang_select'), 
+        ['中文', 'English'], 
+        index=0 if st.session_state.language == '中文' else 1
     )
-    current_persona_name = persona_options[selected_persona_key]
-
-# -------------------------------------------------------------
-# --- 5. 主界面 ---
-# -------------------------------------------------------------
-
-# 主标题和副标题
-st.markdown(f"<h1>{T['app_title']}</h1>", unsafe_allow_html=True)
-st.markdown(f"<div class='subtitle'>{T['subtitle']}</div>", unsafe_allow_html=True)
-
-# 初始化 Session State
-if "messages" not in st.session_state or st.session_state.get("current_persona") != current_persona_name:
-    # 如果更换了画像，重置聊天记录
-    welcome = T["welcome_msg"].format(persona=current_persona_name)
-    st.session_state.messages = [{"role": "assistant", "content": welcome}]
-    st.session_state.current_persona = current_persona_name
-
-# Tab 布局
-tab1, tab2, tab3, tab4 = st.tabs([
-    T["tab_consult"], 
-    T["tab_templates"], 
-    T["tab_lawyers"],
-    T["tab_review"]
-])
-
-# System Prompt for Consultant - 放在外面，供所有模块使用
-consultant_instruction = f"""
-You are Judi, a top-tier international lawyer specializing in cross-border compliance and corporate law.
-Current User Persona (Industry Focus): {current_persona_name}.
-Target Jurisdiction: {{TARGET_COUNTRY}}.
-Language: {lang_code}.
-Style: Professional, rigorous, concise, and highly risk-averse.
-Always provide legal citations or clear legal basis where possible, and end with a clear non-legal advice disclaimer.
-"""
-
-
-# --- Tab 1: AI 法律顾问 (Consultant) ---
-with tab1:
-    st.markdown("### 🤖 **AI 法律智能体：跨境合规**")
-    
-    col_region, col_space = st.columns([1, 3])
-    with col_region:
-        target_country = st.text_input(T["target_region"], value="China" if lang_code == 'en' else "中国")
-    
-    # 根据用户选择更新 instruction
-    current_consultant_instruction = consultant_instruction.replace("{{TARGET_COUNTRY}}", target_country)
-
-    # 聊天界面 - 放在一个固定高度的容器中
-    chat_container = st.container(height=500)
-    for msg in st.session_state.messages:
-        with chat_container.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-    
-    # 聊天输入框放在底部
-    with st.form("chat_form", clear_on_submit=True):
-        col_input, col_submit = st.columns([6, 1])
-        with col_input:
-            prompt = st.text_input(T["chat_placeholder"], key="chat_input_key", label_visibility="collapsed")
-        with col_submit:
-            submitted = st.form_submit_button("发送" if lang_code == 'zh' else "Send", type="primary")
-
-    if submitted and prompt:
-        # 立即更新用户消息
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        # 重新运行以显示用户消息
+    if lang_choice != st.session_state.language:
+        st.session_state.language = lang_choice
         st.rerun()
 
-    # 处理 AI 响应（放在rerun之后，避免输入框被清空前看不到最新的用户消息）
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-        user_prompt = st.session_state.messages[-1]["content"]
-
-        with chat_container.chat_message("assistant"):
-            message_placeholder = st.empty()
-            full_response = ""
-            # 流式传输响应以提高体验
-            try:
-                model = genai.GenerativeModel(
-                    model_name='gemini-2.0-flash', 
-                    system_instruction=current_consultant_instruction
-                )
-                for chunk in model.generate_content(user_prompt, stream=True):
-                    full_response += chunk.text
-                    message_placeholder.markdown(full_response + "▌")
-                message_placeholder.markdown(full_response)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-            except Exception as e:
-                error_msg = f"发生错误: {e}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-        st.experimental_rerun() # 再次rerun以固定助手消息
-
-# --- Tab 2: 智能合同模版 (Templates) ---
-with tab2:
-    st.markdown("### 📄 **律师背书合同库**")
-    st.markdown(f"*{T['template_intro'].format(persona=current_persona_name)}*")
-    
-    # 获取该画像的推荐模版
-    rec_list = RECOMMENDED_TEMPLATES.get(selected_persona_key, [])
-    
-    cols = st.columns(2)
-    for idx, template_name in enumerate(rec_list):
-        with cols[idx % 2]:
-            st.markdown(f"""
-            <div class="card">
-                <h3 style="margin-top:0; font-size:1.1rem; color:var(--accent-color);">📜 {template_name}</h3>
-                <p style="color:var(--text-secondary); font-size:0.9rem;">适用于 {current_persona_name} 的标准律师背书版本。</p>
-                <div style="margin-top:15px;">
-                    {st.button(f"{T['generate_btn']}", key=f"btn_{idx}", use_container_width=True)}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # 使用 session_state 来存储和控制哪个模版被点击
-            if st.session_state.get(f"btn_{idx}"):
-                with st.spinner(T["processing"]):
-                    # 生成模版
-                    draft_prompt = f"Please draft a professional '{template_name}' for a '{current_persona_name}' user. Jurisdiction: {target_country}. Include standard clauses for risk protection. Output the draft as clear Markdown text."
-                    
-                    # 使用 get_gemini_response 获取内容
-                    draft_content = get_gemini_response(draft_prompt, consultant_instruction.replace("{{TARGET_COUNTRY}}", target_country))
-                    
-                    st.success("Draft generated based on legal standards.")
-                    st.code(draft_content, language='markdown') # 使用 st.code 更好展示代码/合同结构
-
-
-# --- Tab 3: 找全球律师 (Global Network) ---
-with tab3:
-    st.markdown("### 🌍 **全球法律专家网络**")
-    
-    lc1, lc2 = st.columns(2)
-    with lc1:
-        city = st.text_input(T["lawyer_city"], value="Shenzhen" if lang_code == 'en' else "深圳市")
-    with lc2:
-        area = st.text_input(T["lawyer_area"], value="Corporate/IP" if lang_code == 'en' else "公司法/知识产权")
-        
     st.markdown("---")
     
-    if st.button(T["find_lawyer_btn"], type="primary", key="find_lawyer_action"):
-        st.session_state.lawyer_card_data = None # 重置
-        with st.spinner(T["processing"]):
-            # Prompt 生成模拟名片数据 JSON
-            card_prompt = f"""
-            Generate a fictional but highly realistic top-tier lawyer profile specializing in: City={city}, Area={area}, focusing on the industry: {current_persona_name}.
-            Output strictly valid JSON format with keys:
-            "name", "firm", "title", "intro" (2 concise sentences about their expertise), "tags" (list of 3 key skills/industries), 
-            "template_specialty" (one common document name for the area), "legal_letter_style" (e.g. Aggressive/Balanced/Concise), "rating" (float 4.5-5.0).
-            Language: {lang_code}.
-            """
-            try:
-                json_str = get_gemini_response(card_prompt, "You are a data generator. Output only clean, valid JSON.").strip().replace("```json", "").replace("```", "")
-                data = json.loads(json_str)
-                st.session_state.lawyer_card_data = data
-            except Exception as e:
-                st.error("AI生成名片失败，请重试。")
-                st.session_state.lawyer_card_data = None
+    # Persona Selection
+    st.markdown(f"### {get_text('persona_select')}")
+    selected_persona_index = 0
+    persona = st.selectbox(
+        "Persona", 
+        get_text('personas'),
+        label_visibility="collapsed"
+    )
     
-    if st.session_state.get("lawyer_card_data"):
-        data = st.session_state.lawyer_card_data
-        st.markdown(T["lawyer_card_intro"])
-        
-        # 渲染名片
-        tags_html = "".join([f"<span class='tag'>{t}</span>" for t in data['tags']])
-        rating_stars = "⭐" * int(data['rating']) + ("½" if data['rating'] - int(data['rating']) >= 0.5 else "")
-        
+    st.markdown("---")
+    
+    # Navigation
+    nav_options = [
+        get_text('nav_home'),
+        get_text('nav_templates'),
+        get_text('nav_consult'),
+        get_text('nav_draft'),
+        get_text('nav_lawyers'),
+        get_text('nav_firms')
+    ]
+    selection = st.radio("Navigation", nav_options, label_visibility="collapsed")
+
+# -----------------------------------------------------------------------------
+# 6. MAIN CONTENT
+# -----------------------------------------------------------------------------
+
+# Header
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.title(get_text('title'))
+    st.caption(get_text('subtitle'))
+with col2:
+    # Just visual balance
+    pass
+
+st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+
+# --- HOME DASHBOARD ---
+if selection == get_text('nav_home'):
+    st.subheader(f"{get_text('welcome')} 👋")
+    st.info(get_text('welcome_desc').format(persona))
+    
+    # Dashboard Grid
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.markdown(f"""
-        <div class="lawyer-card">
-            <div style="display:flex; justify-content:space-between; align-items:start;">
-                <div>
-                    <div class="lawyer-name">{data['name']}</div>
-                    <div class="lawyer-title">{data['firm']} | {data['title']}</div>
-                </div>
-                <div style="font-size:1.5rem; color:#f59e0b;">{rating_stars}</div>
-            </div>
-            <div style="margin: 10px 0;">{tags_html}</div>
-            <p style="color:#4a5568; font-size:0.95rem; line-height:1.5; margin-bottom:15px;">{data['intro']}</p>
-            <div style="font-size:0.85rem; color:#374151;">
-                <div>📄 <b>擅长模版:</b> {data['template_specialty']}</div>
-                <div>📨 <b>函件风格:</b> {data['legal_letter_style']}</div>
-            </div>
-            <br>
-            {st.button(f"💬 {T['consult_agent']} - {data['name']}", key=f"chat_{data['name']}", use_container_width=True)}
+        <div class="st-card">
+            <h4>📄 {get_text('nav_templates')}</h4>
+            <p style="color:#666; font-size:0.9rem">Access verified contracts tailored for {persona}.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""
+        <div class="st-card">
+            <h4>🤖 {get_text('nav_consult')}</h4>
+            <p style="color:#666; font-size:0.9rem">24/7 AI legal advice across multiple jurisdictions.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"""
+        <div class="st-card">
+            <h4>🌍 {get_text('nav_lawyers')}</h4>
+            <p style="color:#666; font-size:0.9rem">Connect with experts in Shenzhen, New York, London...</p>
         </div>
         """, unsafe_allow_html=True)
 
+# --- CONTRACT TEMPLATES ---
+elif selection == get_text('nav_templates'):
+    st.subheader(get_text('rec_templates'))
+    st.markdown("Logic: *Lawyer verified templates based on your selected industry persona.*")
+    
+    templates = TEMPLATE_MAP.get(persona, [])
+    
+    for temp in templates:
+        with st.container():
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.markdown(f"**📄 {temp}**")
+                st.caption("Updated: 2023-10 | Verified by: King & Wood Mallesons (Mock)")
+            with c2:
+                st.button("Download", key=temp)
+            st.divider()
 
-# --- Tab 4: 文书审查 (Risk Review) ---
-with tab4:
-    st.markdown("### 📂 **法律文书风险审查**")
-    st.markdown(f"*{current_persona_name}* 专属风险分析。")
+# --- AI CONSULTATION ---
+elif selection == get_text('nav_consult'):
+    st.subheader(get_text('ai_consult_title'))
     
-    uploaded_file = st.file_uploader(T["upload_area"], type=['pdf', 'docx', 'txt'])
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        country = st.selectbox(get_text('select_country'), ["China", "USA", "Singapore", "UK", "Japan", "EU"])
     
-    if uploaded_file and st.button(T["review_btn"], type="primary"):
-        with st.spinner(T["processing"]):
-            # 读取文件逻辑
-            content = ""
-            try:
-                if uploaded_file.type == "text/plain":
-                    content = uploaded_file.getvalue().decode("utf-8")
-                elif "pdf" in uploaded_file.type:
-                    # 真实应用需要 PDF 解析库，这里用占位符
-                    content = f"[PDF 文件已上传，内容已转换为文本进行分析。] \n\n{uploaded_file.getvalue()[:1000].decode('latin-1')}"
-                elif "document" in uploaded_file.type: # docx
-                    doc = docx.Document(uploaded_file)
-                    content = "\n".join([p.text for p in doc.paragraphs])
-            except Exception as e:
-                st.error(f"文件读取失败: {e}")
-                content = None
+    user_input = st.text_area(get_text('input_question'), height=150)
+    
+    if st.button(get_text('btn_ask')):
+        if not user_input:
+            st.warning("Please enter a question.")
+        else:
+            with st.spinner(get_text('ai_thinking')):
+                time.sleep(1.5) # Simulate API latency
+                st.markdown("### AI Analysis:")
                 
-            if content:
-                review_prompt = f"""
-                Act as a strict compliance lawyer. Review the following contract content based on the persona '{current_persona_name}' and target jurisdiction '{target_country}'.
-                Generate a structured report (in Markdown) with the following sections:
-                1. **风险评级 (Risk Rating):** (High/Medium/Low, must be the first line)
-                2. **3条核心风险 (3 Core Risks):** (Detailed description of the top 3 risks)
-                3. **合规建议 (Compliance Amendments):** (Specific actionable steps)
-                4. **管辖权分析 (Jurisdiction Analysis):** (Comment on the choice of law/forum)
+                # Mock AI Response
+                response_text = ""
+                if st.session_state.language == '中文':
+                    response_text = f"基于**{country}**的法律框架，针对您的问题：\n\n1. **适用法律**: 根据{country}合同法及相关判例...\n2. **风险提示**: 您需要注意条款中的免责声明...\n3. **建议行动**: 建议在起诉前先发送律师函..."
+                else:
+                    response_text = f"Based on **{country}** legal framework regarding your query:\n\n1. **Applicable Law**: According to {country} Contract Law and relevant precedents...\n2. **Risk Warning**: Pay attention to the liability exemption clauses...\n3. **Recommended Action**: It is advisable to send a Cease & Desist letter before litigation..."
                 
-                Document content snippet: {content[:4000]}
-                Language: {lang_code}
-                """
-                
-                result = get_gemini_response(review_prompt, consultant_instruction.replace("{{TARGET_COUNTRY}}", target_country))
-                
-                st.subheader(T["review_result_title"])
-                st.markdown(result)
+                placeholder = st.empty()
+                streamed_text = ""
+                for char in response_text:
+                    streamed_text += char
+                    placeholder.markdown(streamed_text)
+                    time.sleep(0.01)
+
+# --- AI DRAFTING ---
+elif selection == get_text('nav_draft'):
+    st.subheader(get_text('draft_title'))
+    
+    doc_type = st.selectbox(get_text('draft_type'), ["NDA (保密协议)", "Employment Contract (雇佣合同)", "Service Agreement (服务协议)", "Cease & Desist (律师函)"])
+    details = st.text_area(get_text('draft_details'), height=100)
+    
+    if st.button(get_text('btn_draft')):
+        with st.spinner("Drafting..."):
+            time.sleep(2)
+            st.success("Draft Generated Successfully!")
+            st.code(f"""
+            [DRAFT - {doc_type.upper()}]
+            
+            THIS AGREEMENT is made on {time.strftime("%Y-%m-%d")}...
+            
+            BETWEEN:
+            [Party A] AND [Party B]
+            
+            WHEREAS:
+            {details if details else "[Insert Background Information Here]"}
+            
+            1. DEFINITIONS
+            ...
+            
+            2. CONFIDENTIALITY
+            ...
+            
+            (Signed by AI Legal Agent)
+            """, language='markdown')
+
+# --- FIND LAWYERS ---
+elif selection == get_text('nav_lawyers'):
+    st.subheader(get_text('lawyer_find'))
+    
+    l_col1, l_col2 = st.columns([3, 1])
+    with l_col1:
+        # Default City: Shenzhen
+        city = st.text_input(get_text('lawyer_city'), value="Shenzhen" if st.session_state.language != '中文' else "深圳市")
+    with l_col2:
+        st.write("")
+        st.write("") # Spacing
+        search_btn = st.button("Search")
+        
+    st.markdown("---")
+    
+    # Mock Lawyers Data
+    mock_lawyers = [
+        {"name": "Alice Chen", "title": "Senior Partner", "firm": "Global Law Network", "specialty": "IP & Tech", "city": city},
+        {"name": "David Wang", "title": "Associate", "firm": "Shenzhen Legal Hub", "specialty": "Corporate", "city": city},
+        {"name": "Sarah Smith", "title": "Legal Counsel", "firm": "Cross-Border Solutions", "specialty": "International Trade", "city": city}
+    ]
+    
+    # Display Results
+    for idx, lawyer in enumerate(mock_lawyers):
+        with st.container():
+            c1, c2, c3 = st.columns([1, 4, 2])
+            with c1:
+                st.markdown(f"<div style='width:50px; height:50px; background:#eee; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold;'>{lawyer['name'][0]}</div>", unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"**{lawyer['name']}**")
+                st.caption(f"{lawyer['title']} @ {lawyer['firm']}")
+                st.caption(f"📍 {lawyer['city']} | 🏷️ {lawyer['specialty']}")
+            with c3:
+                # Generate Card Button logic
+                if st.button(get_text('card_gen'), key=f"btn_card_{idx}"):
+                    st.session_state.generated_card = lawyer
+            st.divider()
+
+    # Modal/Expander for Business Card
+    if st.session_state.generated_card:
+        st.markdown(f"### {get_text('card_title')}")
+        card_html = render_lawyer_card(
+            st.session_state.generated_card['name'],
+            st.session_state.generated_card['title'],
+            st.session_state.generated_card['firm'],
+            st.session_state.generated_card['specialty'],
+            st.session_state.generated_card['city']
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
+        
+        c_act1, c_act2 = st.columns(2)
+        with c_act1:
+            st.button("📥 Save to Contacts (vCard)", key="dl_card")
+        with c_act2:
+            st.button("💬 Chat with AI Agent", key="chat_agent")
+
+# --- FIND LAW FIRMS ---
+elif selection == get_text('nav_firms'):
+    st.subheader(get_text('firm_find'))
+    
+    f_col1, f_col2 = st.columns([3, 1])
+    with f_col1:
+        # Default Country: China
+        country_firm = st.text_input(get_text('firm_country'), value="China" if st.session_state.language != '中文' else "中国")
+    
+    st.markdown("### Top Ranked Firms")
+    
+    firms = [
+        "King & Wood Mallesons (金杜律师事务所)",
+        "Zhong Lun Law Firm (中伦律师事务所)",
+        "JunHe LLP (君合律师事务所)",
+        "Dentons (大成)"
+    ]
+    
+    for f in firms:
+        st.markdown(f"""
+        <div class="st-card" style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <span style="font-weight:bold; font-size:1.1rem;">{f}</span><br>
+                <span style="color:#666; font-size:0.85rem;">Headquarters: {country_firm} | Rating: ⭐⭐⭐⭐⭐</span>
+            </div>
+            <button style="background:transparent; border:1px solid #ddd; padding:5px 10px; border-radius:4px; cursor:pointer;">View Profile</button>
+        </div>
+        """, unsafe_allow_html=True)
