@@ -51,8 +51,8 @@ RECOMMENDED_TEMPLATES = {
 # 翻译字典
 TRANSLATIONS = {
     "zh": {
-        "app_title": "Judi 全球合规",
-        "subtitle": "硅谷极简风 · 你的AI法律合伙人",
+        "app_title": "iTerms 法律顾问",
+        "subtitle": "汇聚全球法律智慧，24小时服务每位客户",
         "sidebar_settings": "设置",
         "select_persona": "选择你的企业身份",
         "select_persona_help": "AI将根据你的身份提供定制化法律建议",
