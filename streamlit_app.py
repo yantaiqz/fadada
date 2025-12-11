@@ -1,7 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import json
-
+import os
 
 # -------------------------------------------------------------
 # --- 1. 配置与基础数据定义 ---
@@ -10,6 +10,7 @@ st.set_page_config(
     page_title="iTerms | Legal Workspace", 
     page_icon="⚖️", 
     layout="wide",
+    # 核心设置：初始化为展开状态
     initial_sidebar_state="expanded" 
 )
 
@@ -30,10 +31,10 @@ COUNTRY_LIST = [
     "🇲🇽 Mexico (墨西哥)", "🇿🇦 South Africa (南非)"
 ]
 
-# 用户画像定义 (新增律师身份)
+# 用户画像定义
 USER_PERSONAS = {
     "zh": {
-        "lawyer": "👨‍⚖️ 律师/法律从业者", # 新增
+        "lawyer": "👨‍⚖️ 律师/法律从业者", 
         "catering": "🍽️ 餐饮业主",
         "service": "💆 服务业经营者",
         "solo": "💻 独立开发者/自由职业者",
@@ -52,9 +53,9 @@ USER_PERSONAS = {
     }
 }
 
-# 法律文书库 (扩充至8-10个)
+# 法律文书库
 RECOMMENDED_TEMPLATES = {
-    "lawyer": [ # 新增律师专用文书
+    "lawyer": [ 
         "法律服务聘用合同 (Retainer)", "利益冲突豁免函", "律师函 (Cease & Desist)", 
         "法律尽职调查清单 (DD List)", "客户保密协议 (Attorney-Client NDA)", "诉讼保全申请书", 
         "取证授权委托书", "法律意见书模版", "和解协议书", "风险代理收费协议"
@@ -111,7 +112,7 @@ TRANSLATIONS = {
         "sec_firms": "知名律所",
         "sec_courts": "司法/仲裁机构",
         "sec_agencies": "合规/财税/注册机构",
-        "toggle_sidebar": "展开/收起侧边栏"  # 新增翻译
+        "toggle_sidebar": "展开/收起侧边栏" 
     },
     "en": {
         "tab_templates": "Legal Documents",
@@ -131,12 +132,12 @@ TRANSLATIONS = {
         "sec_firms": "Top Law Firms",
         "sec_courts": "Judicial & Arbitration",
         "sec_agencies": "Compliance & Agencies",
-        "toggle_sidebar": "Toggle Sidebar"  # 新增翻译
+        "toggle_sidebar": "Toggle Sidebar" 
     }
 }
 
 # -------------------------------------------------------------
-# --- 2. CSS 样式 (修复侧边栏控制按钮) ---
+# --- 2. CSS 样式 (核心修复：禁止侧边栏折叠) ---
 # -------------------------------------------------------------
 st.markdown("""
 <style>
@@ -159,27 +160,39 @@ st.markdown("""
         color: var(--text-dark);
     }
     
-    /* 修复：仅隐藏不必要的头部元素，保留侧边栏控制按钮 */
-    #header, footer {visibility: hidden;}
+    /* ================================================================= */
+    /* === 核心修复：禁止侧边栏折叠 (Force Sidebar Expanded) === */
+    /* ================================================================= */
+    
+    /* 1. 隐藏侧边栏内部右上角的关闭按钮 (X 或 <) */
+    [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
+    /* 2. 隐藏主界面左上角的展开按钮 (>) - 以防万一它处于折叠状态 */
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
+    /* 3. 隐藏Header decoration，防止干扰 */
     header[data-testid="stHeader"] {
         background: transparent;
-        /* 保留头部高度，避免控制按钮被遮挡 */
-        height: 4rem !important;
+        z-index: 1; 
     }
-    /* 仅隐藏工具栏的Deploy/Setting，保留侧边栏控制 */
+    
+    /* ================================================================= */
+
+    /* 仅隐藏工具栏的Deploy/Setting */
     [data-testid="stToolbar"] > div:not([data-testid="stSidebarNav"]) {
         visibility: hidden;
     }
-    /* 确保侧边栏控制按钮可见且可点击 */
-    [data-testid="stSidebarNav"] {
-        visibility: visible !important;
-        z-index: 9999 !important;
-    }
-    /* 侧边栏样式修复 */
+
+    /* 侧边栏样式微调 */
     [data-testid="stSidebar"] {
         background-color: var(--bg-color) !important;
-        border-right: none;
-        /* 移除过度的padding，避免内容遮挡 */
+        border-right: 1px solid #ddd; /* 加上边框让分隔更明显 */
         padding-top: 1rem !important;
     }
 
@@ -256,7 +269,7 @@ st.markdown("""
         width: 48px;
         height: 48px;
         background: #eef3f8;
-        border-radius: 50%; /* 律师是圆形 */
+        border-radius: 50%; 
         display: flex;
         align-items: center;
         justify-content: center;
@@ -264,7 +277,7 @@ st.markdown("""
         margin-right: 12px;
     }
     .expert-icon.square {
-        border-radius: 8px; /* 机构是圆角矩形 */
+        border-radius: 8px; 
     }
     .expert-info h4 { margin: 0; font-size: 1rem; color: #191919; font-weight: 600; }
     .expert-info p { margin: 2px 0; font-size: 0.85rem; color: #666; }
@@ -283,17 +296,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# --- 3. 侧边栏状态管理 (新增核心逻辑) ---
+# --- 3. 移除不需要的侧边栏切换逻辑 ---
 # -------------------------------------------------------------
-# 初始化侧边栏状态
-if "sidebar_state" not in st.session_state:
-    st.session_state.sidebar_state = "expanded"
-
-# 定义切换侧边栏的函数
-def toggle_sidebar():
-    st.session_state.sidebar_state = "collapsed" if st.session_state.sidebar_state == "expanded" else "expanded"
-    # 强制刷新页面以应用状态
-    st.rerun()
+# 原有的 toggle_sidebar 函数和 session_state 逻辑已移除，
+# 因为我们通过 CSS 强制侧边栏始终显示且不可折叠。
 
 # -------------------------------------------------------------
 # --- 4. API 与 逻辑 ---
@@ -343,15 +349,9 @@ def get_mock_experts(country):
     }
 
 # -------------------------------------------------------------
-# --- 5. 主界面顶部添加手动切换按钮 (兜底方案) ---
+# --- 5. 页面逻辑开始 (移除手动切换按钮) ---
 # -------------------------------------------------------------
-# 先获取语言配置
-lang_choice = st.session_state.get("lang_choice", "🇨🇳 中文")
-lang_code = LANG_OPTIONS[lang_choice]
-T = TRANSLATIONS[lang_code]
-
-# 在主界面顶部添加切换按钮（备用控制方式）
-st.button(T["toggle_sidebar"], on_click=toggle_sidebar, key="toggle_btn", use_container_width=False)
+# 既然侧边栏禁止折叠，主界面的切换按钮也不再需要。
 
 # -------------------------------------------------------------
 # --- 6. 侧边栏 ---
